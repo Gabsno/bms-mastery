@@ -9,8 +9,31 @@ import { LESSONS } from './lessons.js';
 // CONSTANTS
 // ============================================================================
 
-const TUTOR_MODEL = 'claude-sonnet-4-6';
-const KEY_STORAGE = 'bms_anthropic_key';
+// --- AI Tutor providers -----------------------------------------------------
+// Gemini has a genuinely free tier (no credit card); Anthropic is pay-as-you-go.
+const PROVIDER_STORAGE = 'bms_ai_provider';
+const LEGACY_ANTHROPIC_KEY = 'bms_anthropic_key';
+const GEMINI_MODEL = 'gemini-2.0-flash';
+const ANTHROPIC_MODEL = 'claude-sonnet-4-6';
+const DEFAULT_PROVIDER = 'gemini';
+const AI_PROVIDERS = {
+  gemini: {
+    label: 'Google Gemini',
+    badge: 'free',
+    keyStorage: 'bms_key_gemini',
+    placeholder: 'AIza...',
+    signup: 'aistudio.google.com/apikey',
+    note: 'Free — no credit card. Sign in with any Google account, create an API key, and paste it here.',
+  },
+  anthropic: {
+    label: 'Anthropic Claude',
+    badge: 'paid',
+    keyStorage: 'bms_key_anthropic',
+    placeholder: 'sk-ant-...',
+    signup: 'console.anthropic.com',
+    note: 'Pay-as-you-go — needs billing set up. Slightly sharper answers, but not free.',
+  },
+};
 const STATE_STORAGE = 'bms_mastery_v2';
 const OLD_STATE_STORAGE = 'bms_mastery_v1';
 const DAY = 86400000;
@@ -746,6 +769,86 @@ function FlashcardReview({ queue, onFinish, onBack }) {
 // AI TUTOR
 // ============================================================================
 
+function currentProvider() {
+  const p = localStorage.getItem(PROVIDER_STORAGE) || DEFAULT_PROVIDER;
+  return AI_PROVIDERS[p] ? p : DEFAULT_PROVIDER;
+}
+
+function tutorKey(provider) {
+  const p = provider || currentProvider();
+  const key = localStorage.getItem(AI_PROVIDERS[p].keyStorage);
+  if (key) return key;
+  if (p === 'anthropic') return localStorage.getItem(LEGACY_ANTHROPIC_KEY) || '';
+  return '';
+}
+
+// Sends one chat turn to whichever AI provider is configured.
+// Returns { text } on success, or { error } ('nokey' | 'network' | a message).
+async function callTutorAPI({ system, history, userMsg }) {
+  const provider = currentProvider();
+  const key = tutorKey(provider);
+  if (!key) return { error: 'nokey' };
+
+  try {
+    if (provider === 'gemini') {
+      const contents = [
+        ...history.map((m) => ({
+          role: m.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: m.text }],
+        })),
+        { role: 'user', parts: [{ text: userMsg }] },
+      ];
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(key)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system_instruction: { parts: [{ text: system }] },
+            contents,
+          }),
+        },
+      );
+      const data = await res.json();
+      if (!res.ok) return { error: data?.error?.message || `HTTP ${res.status}` };
+      const text = data?.candidates?.[0]?.content?.parts
+        ?.map((p) => p.text || '')
+        .join('')
+        .trim();
+      return { text: text || 'Sorry — no response.' };
+    }
+
+    // anthropic
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: 1000,
+        system,
+        messages: [
+          ...history.map((m) => ({ role: m.role, content: m.text })),
+          { role: 'user', content: userMsg },
+        ],
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { error: data?.error?.message || `HTTP ${res.status}` };
+    const text = data.content
+      ?.filter((c) => c.type === 'text')
+      .map((c) => c.text)
+      .join('\n');
+    return { text: text || 'Sorry — no response.' };
+  } catch {
+    return { error: 'network' };
+  }
+}
+
 function TutorChat({ lesson, onBack, onOpenSettings }) {
   const [messages, setMessages] = useState([
     {
@@ -764,67 +867,44 @@ function TutorChat({ lesson, onBack, onOpenSettings }) {
   const send = async () => {
     if (!input.trim() || loading) return;
     const userMsg = input.trim();
-    const apiKey = localStorage.getItem(KEY_STORAGE);
-
     setInput('');
-    setMessages((m) => [...m, { role: 'user', text: userMsg }]);
 
-    if (!apiKey) {
+    if (!tutorKey()) {
       setMessages((m) => [
         ...m,
+        { role: 'user', text: userMsg },
         {
           role: 'assistant',
-          text: 'No Anthropic API key is set yet. Open Settings (gear icon on the home screen) and paste your key — it stays on this device only.',
+          text: 'No AI key is set yet. Tap the gear icon (Settings) and add a free Google Gemini key — it takes about a minute and costs nothing.',
         },
       ]);
       return;
     }
 
+    // Drop the opening greeting — the API history must start with a user turn.
+    const history = messages.slice(1);
+    setMessages((m) => [...m, { role: 'user', text: userMsg }]);
     setLoading(true);
 
     const lessonContext = lesson
       ? `The user is currently studying the BMS lesson titled "${lesson.title}". Lesson summary: ${lesson.takeaway}. They have 8+ years of MEP/HVAC experience and run an HVAC contracting firm (Yakuver Solutions) in Ghana. Use Ghana-relevant examples (GHC pricing, ECG tariffs, Midea VRF, hot humid climate) when useful. Keep replies tight and concrete.`
       : 'The user is studying building management systems. They have 8+ years of MEP/HVAC experience and run an HVAC firm in Ghana. Keep replies tight and concrete.';
 
-    // API messages must start with a user turn — drop the opening greeting.
-    const priorTurns = messages
-      .slice(1)
-      .map((m) => ({ role: m.role, content: m.text }));
+    const result = await callTutorAPI({
+      system: `You are an expert BMS/BAS tutor. ${lessonContext}`,
+      history,
+      userMsg,
+    });
 
-    try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({
-          model: TUTOR_MODEL,
-          max_tokens: 1000,
-          system: `You are an expert BMS/BAS tutor. ${lessonContext}`,
-          messages: [...priorTurns, { role: 'user', content: userMsg }],
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        const detail = data?.error?.message || `HTTP ${response.status}`;
-        setMessages((m) => [...m, { role: 'assistant', text: `Tutor error: ${detail}` }]);
-      } else {
-        const reply =
-          data.content
-            ?.filter((c) => c.type === 'text')
-            .map((c) => c.text)
-            .join('\n') || 'Sorry — no response.';
-        setMessages((m) => [...m, { role: 'assistant', text: reply }]);
-      }
-    } catch {
-      setMessages((m) => [
-        ...m,
-        { role: 'assistant', text: 'Could not reach the tutor — check your connection and try again.' },
-      ]);
+    let reply;
+    if (result.error === 'network') {
+      reply = 'Could not reach the AI — check your internet connection and try again.';
+    } else if (result.error) {
+      reply = `AI error: ${result.error}`;
+    } else {
+      reply = result.text;
     }
+    setMessages((m) => [...m, { role: 'assistant', text: reply }]);
     setLoading(false);
   };
 
@@ -914,13 +994,24 @@ function TutorChat({ lesson, onBack, onOpenSettings }) {
 // ============================================================================
 
 function SettingsView({ onBack, onResetProgress }) {
-  const [keyInput, setKeyInput] = useState(() => localStorage.getItem(KEY_STORAGE) || '');
+  const [provider, setProvider] = useState(currentProvider);
+  const [keyInput, setKeyInput] = useState(() => tutorKey(currentProvider()));
   const [saved, setSaved] = useState(false);
+
+  const cfg = AI_PROVIDERS[provider];
+
+  const pickProvider = (p) => {
+    setProvider(p);
+    localStorage.setItem(PROVIDER_STORAGE, p);
+    setKeyInput(tutorKey(p));
+    setSaved(false);
+  };
 
   const saveKey = () => {
     const trimmed = keyInput.trim();
-    if (trimmed) localStorage.setItem(KEY_STORAGE, trimmed);
-    else localStorage.removeItem(KEY_STORAGE);
+    if (trimmed) localStorage.setItem(cfg.keyStorage, trimmed);
+    else localStorage.removeItem(cfg.keyStorage);
+    localStorage.setItem(PROVIDER_STORAGE, provider);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -944,31 +1035,59 @@ function SettingsView({ onBack, onResetProgress }) {
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 mb-5">
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-3">
             <KeyRound size={18} className="text-cyan-400" />
-            <h2 className="font-semibold text-slate-100">Anthropic API key</h2>
+            <h2 className="font-semibold text-slate-100">AI Tutor</h2>
           </div>
-          <p className="text-sm text-slate-400 mb-4">
-            The AI Tutor calls the Claude API directly from your browser. Paste your key below — it is stored only in
-            this browser&apos;s local storage and never leaves your device except in requests to Anthropic. Get a key at{' '}
-            <span className="text-cyan-400 font-mono">console.anthropic.com</span>.
+          <p className="text-sm text-slate-400 mb-3">
+            The AI Tutor calls an AI service directly from your browser. Pick a provider and paste its key —
+            the key is stored only on this device and is never sent anywhere except to that provider.
+          </p>
+
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            {Object.entries(AI_PROVIDERS).map(([id, p]) => (
+              <button
+                key={id}
+                onClick={() => pickProvider(id)}
+                className={`px-3 py-3 rounded-xl border-2 text-left transition ${
+                  provider === id
+                    ? 'border-cyan-500 bg-cyan-500/10'
+                    : 'border-slate-700 bg-slate-800/50 hover:border-slate-600'
+                }`}
+              >
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm font-semibold text-slate-100">{p.label}</span>
+                  <span
+                    className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${
+                      p.badge === 'free'
+                        ? 'bg-green-500/20 text-green-300'
+                        : 'bg-orange-500/20 text-orange-300'
+                    }`}
+                  >
+                    {p.badge}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          <p className="text-sm text-slate-400 mb-1">{cfg.note}</p>
+          <p className="text-xs text-slate-500 mb-3">
+            Get a key at <span className="text-cyan-400 font-mono">{cfg.signup}</span>
           </p>
           <input
             type="password"
             value={keyInput}
             onChange={(e) => setKeyInput(e.target.value)}
-            placeholder="sk-ant-..."
+            placeholder={cfg.placeholder}
             className="w-full bg-slate-950 border border-slate-800 focus:border-cyan-500 outline-none rounded-xl px-4 py-3 text-slate-100 font-mono text-sm mb-3"
           />
           <button
             onClick={saveKey}
             className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold px-6 py-3 rounded-xl transition"
           >
-            {saved ? 'Saved' : 'Save key'}
+            {saved ? 'Saved' : `Save ${cfg.label} key`}
           </button>
-          <p className="text-xs text-slate-600 mt-3">
-            Tutor model: <span className="font-mono">{TUTOR_MODEL}</span>
-          </p>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
