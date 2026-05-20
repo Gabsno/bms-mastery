@@ -1023,7 +1023,7 @@ function Home({ state, dueCount, onLesson, onPidLab, onTutor, onFiveMin, onFlash
               <span className="text-cyan-400">BMS</span> Mastery
             </h1>
             <div className="flex items-center gap-3">
-              <span className="text-xs font-mono text-slate-500">v0.2 · Gabs</span>
+              <span className="text-xs font-mono text-slate-500">v1.0 · Gabs</span>
               <button onClick={onSettings} className="text-slate-500 hover:text-cyan-400 transition" title="Settings">
                 <Settings size={18} />
               </button>
