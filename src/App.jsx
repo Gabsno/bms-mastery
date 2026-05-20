@@ -3,6 +3,7 @@ import {
   Flame, Trophy, Zap, BookOpen, Sparkles, ChevronRight, Check, X, RotateCcw,
   Send, ArrowLeft, Sliders, Brain, Target, Coffee, Layers, Settings, KeyRound,
 } from 'lucide-react';
+import { useRegisterSW } from 'virtual:pwa-register/react';
 import { LESSONS } from './lessons.js';
 
 // ============================================================================
@@ -1310,6 +1311,46 @@ function QuickAction({ icon, label, sub, onClick, badge }) {
 // APP
 // ============================================================================
 
+// ============================================================================
+// PWA UPDATE PROMPT — banner shown when a newer deployed version is available
+// ============================================================================
+
+function ReloadPrompt() {
+  const {
+    needRefresh: [needRefresh, setNeedRefresh],
+    updateServiceWorker,
+  } = useRegisterSW({
+    onRegisteredSW(_swUrl, registration) {
+      // While the app is open, check for a new version every 60 seconds.
+      if (registration) {
+        setInterval(() => registration.update(), 60 * 1000);
+      }
+    },
+  });
+
+  if (!needRefresh) return null;
+
+  return (
+    <div className="fixed bottom-4 inset-x-4 z-50 mx-auto max-w-md bg-slate-900 border border-cyan-700/60 rounded-2xl p-4 shadow-2xl flex items-center gap-3">
+      <Sparkles size={18} className="text-cyan-400 flex-shrink-0" />
+      <div className="flex-1 text-sm text-slate-200">A new version of BMS Mastery is ready.</div>
+      <button
+        onClick={() => updateServiceWorker(true)}
+        className="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold px-4 py-2 rounded-lg text-sm transition"
+      >
+        Refresh
+      </button>
+      <button
+        onClick={() => setNeedRefresh(false)}
+        className="text-slate-500 hover:text-slate-300 transition"
+        title="Later"
+      >
+        <X size={18} />
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [state, setState] = useState(initialState);
   const [view, setView] = useState('home'); // home | lesson | pid | tutor | flashcards | settings
@@ -1392,30 +1433,44 @@ export default function App() {
     setView('home');
   };
 
-  if (view === 'pid') return <PIDSimulator onBack={() => setView('home')} />;
-  if (view === 'settings') return <SettingsView onBack={() => setView('home')} onResetProgress={resetProgress} />;
-  if (view === 'flashcards')
-    return <FlashcardReview queue={flashQueue} onFinish={finishFlashcards} onBack={() => setView('home')} />;
-  if (view === 'tutor')
-    return (
+  let screen;
+  if (view === 'pid') {
+    screen = <PIDSimulator onBack={() => setView('home')} />;
+  } else if (view === 'settings') {
+    screen = <SettingsView onBack={() => setView('home')} onResetProgress={resetProgress} />;
+  } else if (view === 'flashcards') {
+    screen = <FlashcardReview queue={flashQueue} onFinish={finishFlashcards} onBack={() => setView('home')} />;
+  } else if (view === 'tutor') {
+    screen = (
       <TutorChat
         lesson={tutorLesson}
         onBack={() => setView(activeLesson ? 'lesson' : 'home')}
         onOpenSettings={() => setView('settings')}
       />
     );
-  if (view === 'lesson' && activeLesson)
-    return <LessonView lesson={activeLesson} onComplete={completeLesson} onBack={() => setView('home')} onAskTutor={openTutor} />;
+  } else if (view === 'lesson' && activeLesson) {
+    screen = (
+      <LessonView lesson={activeLesson} onComplete={completeLesson} onBack={() => setView('home')} onAskTutor={openTutor} />
+    );
+  } else {
+    screen = (
+      <Home
+        state={state}
+        dueCount={dueCards(state).length}
+        onLesson={openLesson}
+        onPidLab={() => setView('pid')}
+        onTutor={openTutor}
+        onFiveMin={fiveMin}
+        onFlashcards={() => startFlashcards(null)}
+        onSettings={() => setView('settings')}
+      />
+    );
+  }
+
   return (
-    <Home
-      state={state}
-      dueCount={dueCards(state).length}
-      onLesson={openLesson}
-      onPidLab={() => setView('pid')}
-      onTutor={openTutor}
-      onFiveMin={fiveMin}
-      onFlashcards={() => startFlashcards(null)}
-      onSettings={() => setView('settings')}
-    />
+    <>
+      {screen}
+      <ReloadPrompt />
+    </>
   );
 }
