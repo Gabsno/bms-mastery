@@ -8,10 +8,11 @@
 // This is a deterrent, not hard security: a static site ships all of its
 // content to the browser, so a determined person could still extract it.
 //
-// To turn the gate OFF, set ACCESS_GATE_ENABLED to false.
+// The gate is currently OFF — the app is open, no access code required.
+// To turn it back ON, set ACCESS_GATE_ENABLED to true.
 // To change the code, run:  node scripts/make-access-code.mjs "new code"
 // then paste the printed hash into ACCESS_CODE_HASH below.
-export const ACCESS_GATE_ENABLED = true;
+export const ACCESS_GATE_ENABLED = false;
 export const ACCESS_CODE_HASH =
   'fedcce2663431e25ebb785b5a7173979a1b3e8e4113ccf4ca2aedd36428a96b7';
 
