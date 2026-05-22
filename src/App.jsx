@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { LESSONS } from './lessons.js';
+import { AccessGate } from './components/AccessGate.jsx';
+import { trackEvent } from './lib/analytics.js';
 
 // ============================================================================
 // CONSTANTS
@@ -459,6 +461,10 @@ function LessonView({ lesson, onComplete, onBack, onAskTutor }) {
   const [selected, setSelected] = useState(null);
   const [score, setScore] = useState(0);
   const [revealed, setRevealed] = useState(false);
+
+  useEffect(() => {
+    trackEvent('lesson-started:' + lesson.id);
+  }, [lesson.id]);
 
   const submitAnswer = () => {
     if (selected === null) return;
@@ -1368,6 +1374,13 @@ export default function App() {
   };
 
   const completeLesson = (lesson, score) => {
+    const pct = lesson.quiz.length
+      ? Math.round((score / lesson.quiz.length) * 10) * 10
+      : 0;
+    trackEvent('lesson-completed:' + lesson.id);
+    trackEvent('quiz-score:' + pct + '%');
+    if (lesson.isBoss) trackEvent('module-completed:' + lesson.moduleNum);
+
     const sd = studyDayUpdate(state);
     const xpGained = 10 + score * 5 + (lesson.isBoss ? 100 : 0);
     const idx = LESSONS.findIndex((l) => l.id === lesson.id);
@@ -1389,6 +1402,7 @@ export default function App() {
   };
 
   const openTutor = (lesson) => {
+    trackEvent('ai-tutor-opened');
     setTutorLesson(lesson || activeLesson);
     setView('tutor');
   };
@@ -1458,7 +1472,10 @@ export default function App() {
         state={state}
         dueCount={dueCards(state).length}
         onLesson={openLesson}
-        onPidLab={() => setView('pid')}
+        onPidLab={() => {
+          trackEvent('pid-lab-opened');
+          setView('pid');
+        }}
         onTutor={openTutor}
         onFiveMin={fiveMin}
         onFlashcards={() => startFlashcards(null)}
@@ -1468,9 +1485,9 @@ export default function App() {
   }
 
   return (
-    <>
+    <AccessGate>
       {screen}
       <ReloadPrompt />
-    </>
+    </AccessGate>
   );
 }
