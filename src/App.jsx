@@ -2,10 +2,14 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Flame, Trophy, Zap, BookOpen, Sparkles, ChevronRight, Check, X, RotateCcw,
   Send, ArrowLeft, Sliders, Brain, Target, Coffee, Layers, Settings, KeyRound,
+  Gauge, Cpu, Wrench,
 } from 'lucide-react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { LESSONS } from './lessons.js';
 import { AccessGate } from './components/AccessGate.jsx';
+import { LibraryView } from './components/LibraryView.jsx';
+import { SignalConverter } from './tools/SignalConverter.jsx';
+import { IoSizer } from './tools/IoSizer.jsx';
 import { trackEvent } from './lib/analytics.js';
 
 // ============================================================================
@@ -1118,7 +1122,18 @@ function SettingsView({ onBack, onResetProgress }) {
 // HOME / DASHBOARD
 // ============================================================================
 
-function Home({ state, dueCount, onLesson, onPidLab, onTutor, onFiveMin, onFlashcards, onSettings }) {
+function Home({
+  state,
+  dueCount,
+  onLesson,
+  onPidLab,
+  onTutor,
+  onFiveMin,
+  onFlashcards,
+  onSettings,
+  onLibrary,
+  onTools,
+}) {
   const currentLesson = LESSONS.find((l) => l.id === state.currentLesson) || LESSONS[0];
   const completed = state.completedLessons.length;
   const total = LESSONS.length;
@@ -1199,6 +1214,8 @@ function Home({ state, dueCount, onLesson, onPidLab, onTutor, onFiveMin, onFlash
         {/* Quick actions */}
         <div className="grid grid-cols-2 gap-3 mb-8">
           <QuickAction icon={<Sliders className="text-cyan-400" />} label="PID Lab" sub="Drag sliders, watch a real loop" onClick={onPidLab} />
+          <QuickAction icon={<Wrench className="text-amber-400" />} label="Tools" sub="Interactive BMS tools" onClick={onTools} />
+          <QuickAction icon={<BookOpen className="text-emerald-400" />} label="Library" sub="BMS reference articles" onClick={onLibrary} />
           <QuickAction icon={<Sparkles className="text-purple-400" />} label="Ask Tutor" sub="Claude, in context of your lesson" onClick={() => onTutor(null)} />
           <QuickAction icon={<Coffee className="text-orange-400" />} label="5-min Mode" sub="One micro-activity, that's it" onClick={onFiveMin} />
           <QuickAction
@@ -1320,6 +1337,74 @@ function QuickAction({ icon, label, sub, onClick, badge }) {
 // ============================================================================
 // PWA UPDATE PROMPT — banner shown when a newer deployed version is available
 // ============================================================================
+
+// ============================================================================
+// TOOLS HUB — a launcher for the interactive BMS tools
+// ============================================================================
+
+const TOOLS = [
+  { id: 'pid', label: 'PID Lab', desc: 'A live AHU cooling loop — drag P, I, D and watch the loop respond.' },
+  { id: 'signal', label: 'Signal Converter', desc: 'Convert between 0–10V, 4–20mA, percent and engineering units.' },
+  { id: 'iosizer', label: 'Controller I/O Sizer', desc: 'Count AI/AO/DI/DO and size the controller with 20% spare.' },
+];
+
+function toolIcon(id) {
+  if (id === 'pid') return <Sliders className="text-cyan-400" />;
+  if (id === 'signal') return <Gauge className="text-cyan-400" />;
+  return <Cpu className="text-cyan-400" />;
+}
+
+function ToolsHub({ onBack }) {
+  const [tool, setTool] = useState(null);
+
+  if (tool === 'pid') return <PIDSimulator onBack={() => setTool(null)} />;
+  if (tool === 'signal') return <SignalConverter onBack={() => setTool(null)} />;
+  if (tool === 'iosizer') return <IoSizer onBack={() => setTool(null)} />;
+
+  const open = (id) => {
+    trackEvent('tool-opened:' + id);
+    setTool(id);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <div className="max-w-3xl mx-auto p-4 md:p-8">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-2 text-slate-400 hover:text-cyan-400 mb-6 transition"
+        >
+          <ArrowLeft size={18} /> back to home
+        </button>
+        <div className="flex items-center gap-3 mb-2">
+          <Wrench className="text-cyan-400" />
+          <h1 className="text-3xl font-bold tracking-tight">BMS Tools</h1>
+        </div>
+        <p className="text-slate-400 mb-8">
+          Hands-on tools to build a feel for how BMS systems behave — play freely, nothing here
+          affects your course progress.
+        </p>
+        <div className="space-y-2">
+          {TOOLS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => open(t.id)}
+              className="w-full text-left flex items-center gap-4 p-4 rounded-xl border bg-slate-900 border-slate-800 hover:border-cyan-700 transition"
+            >
+              <div className="w-10 h-10 rounded-lg bg-slate-800 flex items-center justify-center flex-shrink-0">
+                {toolIcon(t.id)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-slate-100">{t.label}</div>
+                <div className="text-xs text-slate-500 mt-0.5">{t.desc}</div>
+              </div>
+              <ChevronRight size={16} className="text-slate-600 flex-shrink-0" />
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function ReloadPrompt() {
   const {
@@ -1466,6 +1551,10 @@ export default function App() {
     screen = (
       <LessonView lesson={activeLesson} onComplete={completeLesson} onBack={() => setView('home')} onAskTutor={openTutor} />
     );
+  } else if (view === 'library') {
+    screen = <LibraryView onBack={() => setView('home')} />;
+  } else if (view === 'tools') {
+    screen = <ToolsHub onBack={() => setView('home')} />;
   } else {
     screen = (
       <Home
@@ -1480,6 +1569,14 @@ export default function App() {
         onFiveMin={fiveMin}
         onFlashcards={() => startFlashcards(null)}
         onSettings={() => setView('settings')}
+        onLibrary={() => {
+          trackEvent('library-opened');
+          setView('library');
+        }}
+        onTools={() => {
+          trackEvent('tools-opened');
+          setView('tools');
+        }}
       />
     );
   }
